@@ -91,7 +91,8 @@ class DiffWave(Vocoder):
             self.config.model.training_noise_schedule.betas_range[1],
             self.config.model.training_noise_schedule.n_iter,
         ).tolist()
-        self.model = torch.nn.DataParallel(model.DiffWave(self.config.model))
+        # self.model = torch.nn.DataParallel(model.DiffWave(self.config.model))
+        self.model = model.DiffWave(self.config.model).to(torch.device('cpu'))
         # pyre-fixme[6]: Expected `bool` for 1st param but got `Optional[bool]`.
         self.autocast = torch.cuda.amp.autocast(enabled=config.model.fp16)
         self.scaler = torch.cuda.amp.GradScaler(enabled=config.model.fp16)

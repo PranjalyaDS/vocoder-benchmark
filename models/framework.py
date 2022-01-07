@@ -272,6 +272,18 @@ def create_model_commands(model: Type[Vocoder]) -> click.Group:
         Evaluate a given vocoder.
         """
         cli_evaluate(name, model, path, dataset, checkpoint)
+    
+    @group.command("synthesize_mels")
+    @click.option("--path", required=True, help="Directory for the model")
+    @click.argument("input_directory")
+    @click.argument("output_directory")
+    def synthesize_mels(
+        path: str, input_directory: str, output_directory: str
+    ) -> None:
+        """
+        Synthesize with the model.
+        """
+        cli_synthesize_mels(name, model, path, input_directory, output_directory)
 
     return group
 
@@ -356,8 +368,8 @@ def load_model(
     if checkpoint_path is not None:
         load_model_from_checkpoint(model, checkpoint_path)
 
-    if torch.cuda.is_available():
-        model.to("cuda")
+    # if torch.cuda.is_available():
+    #     model.to("cuda")
 
     if eval_mode:
         model.eval()
@@ -474,11 +486,15 @@ def cli_synthesize(
     waveform = torch.from_numpy(waveform).float().unsqueeze(0)
     spectrogram = audio2mel(waveform)
 
-    if torch.cuda.is_available():
-        spectrogram = spectrogram.cuda()
+    # if torch.cuda.is_available():
+    #     spectrogram = spectrogram.cuda()
+    spectrogram = spectrogram.to(torch.device('cpu'))
+    # np.save(f"{input_file.split('/')[0]}/spectrograms/{input_file.split('/')[-1].strip('.wav')}.npy", spectrogram.cpu().detach().numpy())
 
-    # Run the model and write its output.
+     # Run the model and write its output.
+    start_time = time.time()
     generated = model.generate(spectrogram, False).squeeze(0).cpu().numpy()
+    print(f"Time taken to synthesize {input_file.split('/')[-1]} : {time.time()-start_time}")
     write_audio(output_file, generated, AUDIO_SAMPLE_RATE)
 
 
@@ -540,6 +556,44 @@ def cli_evaluate(
     print(f"writing metadata to {metadata_json}")
     with open(metadata_json, "w") as handle:
         json.dump(metadata, handle)
+
+
+def cli_synthesize_mels(
+    model_name: str,
+    model_class: Type[Vocoder],
+    path: str,
+    input_directory: str,
+    output_directory: str,
+) -> None:
+    """
+    Synthesize with the model.
+
+    Args:
+      model_name: The model type, e.g. 'wavernn'.
+      model_class: The class for the model.
+      path: Path to the model directory.
+      input_file: Path to an input WAV file.
+      output_file: Path where to place output WAV file.
+    """
+    die_if(not os.path.exists(path), f"Model path {path} does not exist")
+
+    print(f"Synthesizing with {model_name} model located at {path}.")
+    print(f"Loading audio features from {input_directory}.")
+    print(f"Synthesizing waveform into {output_directory}.")
+
+    os.makedirs(output_directory, exist_ok=True)
+
+    # Load the model from disk.
+    model = load_model(model_class, path, eval_mode=True)
+
+    for spect in os.listdir(input_directory):
+        spectrogram = torch.Tensor(np.load(os.path.join(input_directory, spect))).to(torch.device('cpu'))
+
+        # Run the model and write its output.
+        start_time = time.time()
+        generated = model.generate(spectrogram, False).squeeze(0).cpu().numpy()
+        print(f"Time taken to synthesize {spect.split('.')[0]} : {time.time()-start_time}")
+        write_audio(os.path.join(output_directory, f"diffwave_cpu_mels_{spect.split('.')[0]}.wav"), generated, AUDIO_SAMPLE_RATE)
 
 
 # Linter complains that this function is too complex, but it's a bit tricky to
