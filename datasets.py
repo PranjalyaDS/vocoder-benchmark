@@ -16,6 +16,9 @@ from typing import Tuple, Set, List, Union, Iterator
 import click
 import torch
 import torchaudio
+from torch.utils.data import Dataset
+from pathlib import Path
+import csv
 
 from utils import die_if # @oss-only
 # @fb-only: from langtech.tts.vocoders.utils import die_if 
@@ -31,7 +34,7 @@ with warnings.catch_warnings():
 SPLIT_JSON: str = "data_split.json"
 
 # Datasets we can load and use.
-KNOWN_DATASETS: Set[str] = {"ljspeech", "libritts", "vctk"}
+KNOWN_DATASETS: Set[str] = {"ljspeech", "libritts", "vctk", "custom"}
 
 # How to split LJ dataset. LJ is split by taking the first K1 samples as test,
 # K2 samples as validation, and the rest as training.
@@ -440,6 +443,20 @@ def load_dataset(
                 generate=True,
             ),
         )
+    elif name == "custom":
+        dset = CUSTOM(root=path)
+
+        return (
+            create_dataloader(dset, split["train"], config, validation=False),
+            create_dataloader(dset, split["validation"], config, validation=True),
+            create_dataloader(
+                dset,
+                split["test"][:num_generate_samples],
+                config,
+                validation=False,
+                generate=True,
+            ),
+        )
 
     raise ValueError(f"Unknown dataset {name}")
 
@@ -551,3 +568,54 @@ def split_command(dataset: str, path: str) -> None:
 
     with open(os.path.join(path, SPLIT_JSON), "w") as handle:
         json.dump(split, handle)  # pyre-ignore
+
+
+class CUSTOM(Dataset):
+    """Create a Custom Dataset
+    Args:
+        root (str or Path): Path to the directory where the dataset is found or downloaded.
+        folder_in_archive (str, optional):
+            The top-level directory of the dataset. (default: ``"wavs"``)
+    """
+
+    def __init__(self,
+                 root: Union[str, Path],
+                 folder_in_archive: str = "wavs") -> None:
+
+        self._parse_filesystem(root, folder_in_archive)
+
+    def _parse_filesystem(self, root: str, folder_in_archive: str) -> None:
+        root = Path(root)
+
+        self._path = root / folder_in_archive
+        self._metadata_path = root / 'metadata.csv'
+
+        with open(self._metadata_path, "r", newline='') as metadata:
+            flist = csv.reader(metadata, delimiter="|", quoting=csv.QUOTE_NONE)
+            self._flist = list(flist)
+
+    def __getitem__(self, n: int):
+        """Load the n-th sample from the dataset.
+        Args:
+            n (int): The index of the sample to be loaded
+        Returns:
+            (Tensor, int, str, str):
+            ``(waveform, sample_rate, transcript, normalized_transcript)``
+        """
+        line = self._flist[n]
+        fileid, transcript = line
+        normalized_transcript = transcript
+        fileid_audio = self._path / (fileid)
+
+        # Load audio
+        waveform, sample_rate = torchaudio.load(fileid_audio)
+
+        return (
+            waveform,
+            sample_rate,
+            transcript,
+            normalized_transcript,
+        )
+
+    def __len__(self) -> int:
+        return len(self._flist)
